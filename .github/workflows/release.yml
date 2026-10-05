@@ -1,0 +1,126 @@
+name: Build and Release StreamScout
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'source/**'
+      - 'launcher/**'
+      - 'assets/**'
+      - '.github/workflows/release.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-release:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.x'
+
+      - name: Restore application source and icon
+        shell: pwsh
+        run: |
+          @'
+          from pathlib import Path
+          import base64, zlib, re
+          parts = [
+              'source/chunk01.txt', 'source/chunk02.txt', 'source/chunk03.txt',
+              'source/chunk04a.txt', 'source/chunk04b.txt'
+          ]
+          packed = ''.join(Path(p).read_text(encoding='utf-8').strip() for p in parts)
+          source = zlib.decompress(base64.b64decode(packed))
+          out = Path('launcher/payload')
+          out.mkdir(parents=True, exist_ok=True)
+          (out / 'stream_scout.py').write_bytes(source)
+          text = source.decode('utf-8')
+          m = re.search(r'APP_VERSION\s*=\s*["\']([^"\']+)["\']', text)
+          if not m:
+              raise SystemExit('APP_VERSION not found')
+          Path('version.txt').write_text(m.group(1), encoding='utf-8')
+          icon64 = Path('assets/icon256a.txt').read_text().strip() + Path('assets/icon256b.txt').read_text().strip()
+          (out / 'stream_scout.ico').write_bytes(base64.b64decode(icon64))
+          print('Version:', m.group(1))
+          print('Source bytes:', len(source))
+          print('Icon bytes:', (out / 'stream_scout.ico').stat().st_size)
+          '@ | Set-Content -Encoding utf8 restore_payload.py
+          python restore_payload.py
+          python -m py_compile launcher/payload/stream_scout.py
+
+      - name: Read version
+        id: meta
+        shell: pwsh
+        run: |
+          $version = (Get-Content version.txt -Raw).Trim()
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "tag=v$version" >> $env:GITHUB_OUTPUT
+
+      - name: Check existing release
+        id: existing
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "${{ steps.meta.outputs.tag }}" --repo "$env:GITHUB_REPOSITORY" *> $null
+          if ($LASTEXITCODE -eq 0) {
+            "exists=true" >> $env:GITHUB_OUTPUT
+          } else {
+            "exists=false" >> $env:GITHUB_OUTPUT
+          }
+          exit 0
+
+      - name: Install Windows resource compiler
+        if: steps.existing.outputs.exists != 'true'
+        shell: pwsh
+        run: go install github.com/akavel/rsrc@latest
+
+      - name: Build Windows EXE
+        if: steps.existing.outputs.exists != 'true'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Push-Location launcher
+          $rsrc = Join-Path (go env GOPATH) 'bin\rsrc.exe'
+          & $rsrc -ico 'payload\stream_scout.ico' -o 'rsrc_windows_amd64.syso'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $name = "StreamScoutDownloader_v${{ steps.meta.outputs.version }}.exe"
+          go build -trimpath -ldflags='-H=windowsgui -s -w' -o "..\dist\$name" .
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Pop-Location
+
+      - name: Generate SHA-256
+        if: steps.existing.outputs.exists != 'true'
+        shell: pwsh
+        run: |
+          $name = "StreamScoutDownloader_v${{ steps.meta.outputs.version }}.exe"
+          $hash = (Get-FileHash "dist\$name" -Algorithm SHA256).Hash.ToLower()
+          "$hash  $name" | Set-Content -Encoding ascii "dist\$name.sha256"
+          Write-Host "SHA256: $hash"
+
+      - name: Create GitHub Release
+        if: steps.existing.outputs.exists != 'true'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $version = "${{ steps.meta.outputs.version }}"
+          $tag = "v$version"
+          $name = "StreamScoutDownloader_v$version.exe"
+          gh release create $tag "dist\$name" "dist\$name.sha256" --repo "$env:GITHUB_REPOSITORY" --title "StreamScout Downloader $tag" --notes "Automatic StreamScout Downloader $tag release." --latest
+
+      - name: Release already exists
+        if: steps.existing.outputs.exists == 'true'
+        shell: pwsh
+        run: Write-Host "Release ${{ steps.meta.outputs.tag }} already exists; nothing to publish."
