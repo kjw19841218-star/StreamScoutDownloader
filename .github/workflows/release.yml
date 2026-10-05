@@ -35,7 +35,7 @@ jobs:
         run: |
           @'
           from pathlib import Path
-          import base64, zlib, re
+          import base64, zlib
           parts = [
               'source/chunk01.txt', 'source/chunk02.txt', 'source/chunk03.txt',
               'source/chunk04a.txt', 'source/chunk04b.txt'
@@ -45,14 +45,8 @@ jobs:
           out = Path('launcher/payload')
           out.mkdir(parents=True, exist_ok=True)
           (out / 'stream_scout.py').write_bytes(source)
-          text = source.decode('utf-8')
-          m = re.search(r'APP_VERSION\s*=\s*["\']([^"\']+)["\']', text)
-          if not m:
-              raise SystemExit('APP_VERSION not found')
-          Path('version.txt').write_text(m.group(1), encoding='utf-8')
           icon64 = Path('assets/icon256a.txt').read_text().strip() + Path('assets/icon256b.txt').read_text().strip()
           (out / 'stream_scout.ico').write_bytes(base64.b64decode(icon64))
-          print('Version:', m.group(1))
           print('Source bytes:', len(source))
           print('Icon bytes:', (out / 'stream_scout.ico').stat().st_size)
           '@ | Set-Content -Encoding utf8 restore_payload.py
@@ -63,7 +57,8 @@ jobs:
         id: meta
         shell: pwsh
         run: |
-          $version = (Get-Content version.txt -Raw).Trim()
+          $version = (Get-Content launcher/VERSION -Raw).Trim()
+          if (-not $version) { throw 'launcher/VERSION is empty' }
           "version=$version" >> $env:GITHUB_OUTPUT
           "tag=v$version" >> $env:GITHUB_OUTPUT
 
