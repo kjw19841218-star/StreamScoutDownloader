@@ -1,0 +1,7 @@
+{
+  "app": "StreamScout Downloader",
+  "channel": "stable",
+  "release_asset_pattern": "StreamScoutDownloader_v{version}.exe",
+  "latest_release_api": "https://api.github.com/repos/kjw19841218-star/StreamScoutDownloader/releases/latest",
+  "repository": "kjw19841218-star/StreamScoutDownloader"
+}
